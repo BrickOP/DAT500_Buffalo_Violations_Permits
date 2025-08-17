@@ -1,0 +1,688 @@
+---
+title: "DAT 500 - Final Project"
+author: "Hanna Koul & Nuzaif Naveed"
+editor: visual
+execute:
+  echo: false
+  message: false
+  warning: false
+format:
+  html:
+    embed-resources: true
+---
+
+## Introduction
+
+This project analyzes two public data sets from the City of Buffalo’s Open Data Portal: **Code Violations** and **Permits**.
+
+The **Code Violations** data set contains approximately 195,000 records of reported housing and building violations, ranging from 2016 through mid-2025. Each record includes information about the violation and the parcel of property it occurred on.
+
+The **Permits** data set includes around 166,000 building permit records, covering the time period from 2007 through 2025. It provides details on the type of permit issued, as well as the piece of real estate the project is taking place on.
+
+This report focuses on exploring the trends in the data across Neighborhoods and Time. The original hypothesis for the project was that there is a relationship between real estate owners committing code violations and obtaining permits to subsequently improve the property. The findings of the report may still be used in researching this matter, by way of minimizing unimportant correlations and focusing on specific neighborhoods as particularly interesting case studies.
+
+## Data Cleaning
+
+We begin by clearing the R environment to ensure a fresh session, then loading necessary packages from the tidyverse for data manipulation, visualization, and date handling. Next, we import the two data sets — Code Violations and Permits — as CSV files into R for cleaning and analysis.
+
+```{r}
+#| warning: false
+#| include: false
+#| 
+# Cleaning Environment & Loading Datasets
+
+rm(list = ls())
+
+# Loading the libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(ggtext)
+
+
+# Loading the datasets
+
+Code_Violations <- read_csv("Code_Violations_20250730.csv")
+Permits <- read_csv("Permits_20250730.csv")
+
+
+```
+
+##### Preview of Code Violations Data Set
+
+```{r}
+kable(head(Code_Violations))
+```
+
+##### Preview of Permits Data Set
+
+```{r}
+kable(head(Permits))
+```
+
+The date columns in both datasets were initially stored as character strings, which limited their usefulness for time-based analysis. To address this, the relevant columns were converted to appropriate date or date-time formats using functions from the lubridate package. In the Code Violations dataset, the Date column was parsed as a full timestamp (POSIXct), enabling detailed time analysis. From this, new columns were derived to extract the year, month, day, and a combined month-year (ViolationMY) format.
+
+Similarly, in the Permits dataset, both the Issued and Expiration Date columns were converted into date format. For each, new columns were created to capture the year, month, day, and month-year (IssuedMY and ExpiredMY) to support grouped visualizations and trends over time.
+
+```{r}
+#|warning: false
+#| include: false
+# fixing dates in proper POSIXct format in Code Violations
+
+Code_Violations$Date <- mdy_hms(Code_Violations$Date)
+
+# Creating separate columns for Year, Month and Day in Code Violations
+
+Code_Violations$ViolationYear <- year(Code_Violations$Date)
+Code_Violations$ViolationMonth <- month(Code_Violations$Date)
+Code_Violations$ViolationDay <- day(Code_Violations$Date)
+Code_Violations$ViolationMY <- format(Code_Violations$Date, "%m %Y")
+
+# fixing dates in proper POSIXct format in Permits
+
+Permits$Issued <- mdy(Permits$Issued)
+Permits$`Expiration Date` <- mdy(Permits$`Expiration Date`)
+
+# Creating separate columns for Year, Month and Day in Permits for Issued and Expired
+
+Permits$IssuedYear <- year(Permits$Issued)
+Permits$IssuedMonth <- month(Permits$Issued)
+Permits$IssuedDay <- day(Permits$Issued)
+Permits$IssuedMY <- format(Permits$Issued, "%m %Y")
+
+Permits$ExpiredYear <- year(Permits$`Expiration Date`)
+Permits$ExpiredMonth <- month(Permits$`Expiration Date`)
+Permits$ExpiredDay <- day(Permits$`Expiration Date`)
+Permits$ExpiredMY <- format(Permits$`Expiration Date`, "%m %Y")
+```
+
+Both data sets contained numerous geographic and administrative variables that were not essential to our analysis. To streamline the data and reduce complexity, we removed columns such as latitude, longitude, council district, and various census identifiers like "census tract", "geoid20 tract", and "2010 census block". These variables were not relevant to our project objectives, and thus, removing them allowed us to focus more effectively on the core variables of interest and simplify downstream visualizations and analyses. There is minimal data in the Permits data set from before 2014, so that can be removed without much loss of information.
+
+```{r}
+#|warning: false
+#|include: false
+# Removing unnecessary variables
+
+Code_Violations <- Code_Violations %>%
+  select(-`Council District`, -`Council District 2011`, -`Police District`, -Latitude, -Longitude, -Location,
+         -`Census Tract`, -`Census Block Group`, -`Census Block`, -`2010 Census Tract`, -`2010 Census Block Group`,
+         -`2010 Census Block`, -TRACTCE20, -GEOID20_block, -GEOID20_tract, -GEOID20_blockgroup)
+  
+Code_Violations <- subset(Code_Violations, (ViolationYear > 2014))
+
+Permits <- Permits %>%
+  select(-`Units added`, -`Units Lost`, -Location, -Latitude, -Longitude, -`Council District`,
+         -`Council District 2011`, -`Police District`, -`Census Tract`, -`Census Block Group`,
+         -`Census Block`, -`2010 Census Tract`, -`2010 Census Block Group`, -`2010 Census Block`,
+         -TRACTCE20, -GEOID20_tract, -GEOID20_blockgroup, -GEOID20_block)
+```
+
+```{r}
+#|include: false
+# Creating Property type Variable based on Prop Class
+
+Code_Violations <- Code_Violations %>%
+  mutate(Property_Type = case_when(
+    between(`Prop Class`, 100, 199) ~ "Agricultural",
+    between(`Prop Class`, 200, 299) ~ "Residential",
+    between(`Prop Class`, 300, 399) ~ "Vacant Land",
+    between(`Prop Class`, 400, 499) ~ "Commercial",
+    between(`Prop Class`, 500, 599) ~ "Recreational",
+    between(`Prop Class`, 600, 699) ~ "Community Services",
+    between(`Prop Class`, 700, 799) ~ "Industrial",
+    between(`Prop Class`, 800, 899) ~ "Public Services",
+    between(`Prop Class`, 900, 999) ~ "Wild/Conservation",
+    TRUE ~ "Other"
+  ))
+
+# Creating Property type Variable based on Land Use
+
+Permits <- Permits %>%
+  mutate(Property_Type = case_when(
+    between(`Land Use`, 100, 199) ~ "Agricultural",
+    between(`Land Use`, 200, 299) ~ "Residential",
+    between(`Land Use`, 300, 399) ~ "Vacant Land",
+    between(`Land Use`, 400, 499) ~ "Commercial",
+    between(`Land Use`, 500, 599) ~ "Recreational",
+    between(`Land Use`, 600, 699) ~ "Community Services",
+    between(`Land Use`, 700, 799) ~ "Industrial",
+    between(`Land Use`, 800, 899) ~ "Public Services",
+    between(`Land Use`, 900, 999) ~ "Wild/Conservation",
+    TRUE ~ "Other"
+  ))
+```
+
+To make the data sets more interpretable, we created a new categorical variable called Property_Type in both data sets. This variable was derived from the numerical property classification codes: “Prop Class” in the Code Violations data set and “Land Use” in the Permits data set. These codes were grouped into broader categories such as Residential, Commercial, Industrial, and others, based on standard classification ranges. This transformation allows for easier comparison and visualization of trends across different types of properties.
+
+```{r}
+#|warning: false
+#|include: false
+# Taking the characters out of the code to define code type in Code Violations
+
+Code_Violations <- Code_Violations %>%
+  mutate(Code_System = str_extract(Code, "^[A-Za-z]+"))
+
+# Assigning Descriptive names to it
+
+Code_Violations <- Code_Violations %>%
+  mutate(Code_Type = case_when(
+    Code_System == "IPMC"     ~ "Property Maintenance – Model",
+    Code_System %in% c("PM","PMCNYS","NYSPMC") 
+    ~ "Property Maintenance – NY State",
+    Code_System == "B"        ~ "Building Code",
+    Code_System == "IBC"      ~ "International Building Code",
+    Code_System == "IRC"      ~ "Residential Code",
+    Code_System == "IFC"      ~ "Fire Code",
+    Code_System == "RPAPL"    ~ "Real Property Legal Statute",
+    Code_System == "BGC"      ~ "General Building Code Committee",
+    TRUE                       ~ "Other"
+  ))
+```
+
+In the Code Violations data set, the "Code" column includes a combination of letters and numbers that reference various legal or regulatory codes. To categorize these, we extracted the alphabetic portion at the beginning of each code into a new variable called "Code_System". We then used this to create a new descriptive variable, "Code_Type", which assigns meaningful labels such as “Property Maintenance – NY State” or “Building Code” based on the code prefix. This makes the data easier to understand and analyze by grouping violations under broader regulatory categories.
+
+The "Permit Type" variable in the Permits data set contains a wide range of categories, many of which appear infrequently. To simplify analysis and visualization, we grouped less common permit types—those making up less than 1% of total permits under a single category labeled “Other.” This approach helps focus on the most relevant permit types while maintaining interpretability. Below, the "before" and "after" of this process can be viewed.
+
+```{r}
+#|warning: false
+ggplot(Permits, aes(x = `Permit Type`)) +
+  geom_bar() +
+  labs(title = "Distribution of Permit Types (Initial)", x = "Permit Type", y = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+#|warning: false
+#|include: false
+# Get frequencies
+permit_counts <- table(Permits$`Permit Type`)
+total_permits <- sum(permit_counts)
+threshold <- 0.01 * total_permits  # 1% cutoff
+
+# Create a vector of top permit types
+common_types <- names(permit_counts[permit_counts >= threshold])
+
+# Re-code into new column
+Permits <- Permits %>%
+  mutate(`Permit Type` = ifelse(`Permit Type` %in% common_types,
+                                `Permit Type`,
+                                "Other"))
+```
+
+```{r}
+#|warning: false
+ggplot(Permits, aes(x = `Permit Type`)) +
+  geom_bar() +
+  labs(title = "Distribution of Permit Types (New)", x = "Permit Type", y = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+#|warning: false
+# Convert to unordered factors
+Permits$Property_Type <- factor(Permits$Property_Type, levels = c("Agricultural", 
+                                   "Residential", "Vacant Land", "Commercial",
+                                   "Recreational", "Community Services", "Industrial",
+                                   "Public Services", "Wild/Conservation", "Other"),
+                                   ordered = FALSE)
+Permits$Neighborhood <- factor(Permits$Neighborhood, 
+                               levels = c("Allentown", "Black Rock", "Broadway Fillmore", 
+                                          "Central", "Central Park","Delavan Grider", "Ellicott", 
+                                          "Elmwood Bidwell", "Elmwood Bryant",    
+                                          "Fillmore-Leroy", "First Ward", "Fruit Belt",        
+                                          "Genesee-Moselle", "Grant-Amherst", "Hamlin Park",       
+                                          "Hopkins-Tifft", "Kaisertown", "Kenfield",          
+                                          "Kensington-Bailey", "Lovejoy", "Lower West Side",   
+                                          "Masten Park", "MLK Park", "North Park",        
+                                          "Parkside", "Pratt-Willert", "Riverside",         
+                                          "Schiller Park", "Seneca-Cazenovia", "Seneca Babcock",    
+                                          "South Park", "University Heights", "Upper West Side", 
+                                          "West Hertel", "West Side"),
+                               ordered = FALSE)
+Permits$`Permit Type` <- factor(Permits$`Permit Type`, 
+                                levels = c("DEMOLITION", "ELECTRICAL", "FENDRIVE", 
+                                           "GC", "HEATING", "PLUMBING", "REPAIR", 
+                                           "SIGN", "USE", "Other"),
+                                ordered = FALSE)
+Code_Violations$Code_Type <- factor(Code_Violations$Code_Type, 
+                                       levels = c("Property Maintenance – Model", 
+                                                  "Property Maintenance – NY State",
+                                                  "Building Code", "International Building Code",
+                                                  "Residential Code", "Fire Code",
+                                                  "Real Property Legal Statute", 
+                                                  "General Building Code Committee",
+                                                  "Other"),
+                                       ordered = FALSE)
+Code_Violations$Neighborhood <- factor(Code_Violations$Neighborhood, 
+                                       levels = c("Allentown", "Black Rock", "Broadway Fillmore", 
+                                                  "Central", "Ellicott", "Elmwood Bidwell", 
+                                                  "Elmwood Bryant",    
+                                                  "Fillmore-Leroy", "First Ward", "Fruit Belt",        
+                                                  "Genesee-Moselle", "Grant-Amherst", "Hamlin Park",
+                                                  "Hopkins-Tifft", "Kaisertown", "Kenfield",          
+                                                  "Kensington-Bailey", "Lovejoy", "Lower West Side",   
+                                                  "Masten Park", "MLK Park", "North Park",        
+                                                  "Parkside", "Pratt-Willert", "Riverside",         
+                                                  "Schiller Park", "Seneca-Cazenovia", "Seneca Babcock",
+                                                  "South Park", "University Heights", "Upper West Side",
+                                                  "West Hertel", "West Side"),
+                                       ordered = FALSE)
+Code_Violations$Property_Type <- factor(Code_Violations$Property_Type, 
+                                           levels = c("Agricultural", "Residential", 
+                                                      "Vacant Land", "Commercial",
+                                                      "Recreational", "Community Services",
+                                                      "Industrial",
+                                                      "Public Services", "Wild/Conservation", "Other"),
+                                           ordered = FALSE)
+```
+
+Several key categorical variables in both data sets such as "Property Type", "Neighborhood", and "Code Type" were converted to un-ordered factors. This ensures that R treats them as categorical variables during analysis and visualization, improving the clarity and accuracy of grouped summaries, plots, and model interpretations.
+
+```{r}
+#|warning: false
+## investigating missing expiry dates
+
+Permits_NonExp <- Permits |>
+  filter(is.na(`Expiration Date`))
+
+ggplot(Permits_NonExp, aes(x = IssuedYear)) +
+  geom_bar(aes(fill = `Permit Type`), color = "grey75")+
+  theme_dark() +
+  scale_fill_brewer(palette = "Set3") +
+  labs(title = "Permits with Missing Expiration Date by Year", x = "Issued Year", y = "Count")
+```
+
+This plot highlights the temporal distribution of permits missing their expiration dates. The fact that in the years before 2016, nearly 100% of the recorded issued permits do not have expiration dates speaks to a change in the way the information about permits was recorded, as opposed to an inherent quality of those permits. Thus, this data will still be included in further exploration, and this is merely a curiosity.
+
+## Permit Types Across Neighborhoods
+
+First, we take a look at how many permits were issued per neighborhood, and their types. In order to accomplish this, we decided to use a horizontal bar plot, to retain readability for the names of the neighborhoods.
+
+```{r}
+#|label: Permits Issued Across Neighborhoods
+#|warning: false
+
+ggplot(Permits, aes(y = Neighborhood)) +
+  scale_y_discrete(limits = rev(levels(Permits$Neighborhood))) +
+  theme_dark() +
+  geom_bar(aes(fill = `Permit Type`), color = "grey75") +
+  scale_fill_brewer(palette = "Set3") +
+  scale_x_continuous(breaks = c(seq(0, 15000, 1500))) +
+  theme(legend.text = element_text(size = 8), 
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Permit Types, Broken Down By Neighborhood", 
+       y ="Neighborhood", x = "Count", fill = "Permit Type")
+
+```
+
+From this plot, it can be seen that some neighborhoods are quite a lot more prolific with regards to permits issued in them. Perhaps it would be useful to separate out those neighborhoods and examine both in more detail.
+
+```{r}
+#|label: Top 5 Neighborhoods With the Most Permits Issued
+#|warning: false
+
+dfNSub <- subset(Permits, Neighborhood %in% c("Broadway Fillmore", 
+                                              "Elmwood Bidwell", "Elmwood Bryant", 
+                                              "North Park", "South Park"))
+
+ggplot(dfNSub, aes(y = Neighborhood, fill = `Permit Type`)) +
+  scale_y_discrete(limits = rev) +
+  theme_dark() +
+  geom_bar(position = "fill", color = "grey75") +
+  scale_fill_brewer(palette="Set3") +
+  labs(title = "Permit Types Distribution By Neighborhood, Top 5 by Count", y ="Neighborhood", x = "Proportion", fill = "Permit Type")
+```
+
+```{r}
+#|label: The rest of the neighborhoods, examined
+#|warning: false
+
+dfNSub2 <- subset(Permits, !(Neighborhood %in% c("Broadway Fillmore", 
+                                              "Elmwood Bidwell", "Elmwood Bryant", 
+                                              "North Park", "South Park", NA)))
+ggplot(dfNSub2, aes(y = Neighborhood, fill = `Permit Type`)) +
+  scale_y_discrete(limits = rev) +
+  theme_dark() +
+  geom_bar(position = "fill", color = "grey75") +
+  scale_fill_brewer(palette="Set3") +
+  labs(title = "Permit Types Distribution By Neighborhood, Not Top 5 by Count", y ="Neighborhood", x = "Proportion", fill = "Permit Type")
+```
+
+There do not seem to be any obvious differences in the distribution of permit types between the neighborhoods in the "Top 5 by Count" group and those outside of it. It can, however, be concluded that "Electrical", "Plumbing", "Heating", and "Repair" are the most issued type of permit. Also of interest is that "General Construction" does not seem to be high in neighborhoods with a higher proportion or count of "Demolition".
+
+## Violation Types Across Neighborhoods
+
+Similarly, we examine the distribution of violation types across the neighborhoods.
+
+```{r}
+#|label: Violation Distribution and Proportions Across Neighborhoods
+#|warning: false
+
+ggplot(Code_Violations, aes(y = Neighborhood)) +
+  theme_dark() +
+  scale_y_discrete(limits = rev(levels(Code_Violations$Neighborhood))) +
+  geom_bar(aes(fill = Code_Type), color = "grey90") +
+  scale_fill_brewer(palette = "Spectral") +
+  scale_x_continuous(breaks = c(seq(0, 15000, 1500))) +
+  theme(legend.text = element_text(size = 7), 
+        plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Violation Types, Broken Down By Neighborhood", 
+       y ="Neighborhood", x = "Count", fill = "Violation Type")
+
+```
+
+Here, there is also a number of neighborhoods with a notably high count of violations.
+
+```{r}
+#|label: Top 6 Neighborhoods With the Most Violations
+#|warning: false
+
+dfCSub <- subset(Code_Violations, Neighborhood %in% c("Broadway Fillmore", "Genesee-Moselle", "Kensington-Bailey", "Lovejoy", "Riverside", "Schiller Park"))
+
+ggplot(dfCSub, aes(y = Neighborhood, fill = Code_Type)) +
+  theme_dark() +
+  scale_y_discrete(limits = rev) +
+  geom_bar(position = "fill", color = "grey90") +
+  scale_fill_brewer(palette="Spectral") +
+  labs(title = "Violation Types Distribution By Neighborhood, Top 6 by Count", y ="Neighborhood", x = "Proportion", fill = "Violation Type")
+
+```
+
+```{r}
+#|label: The rest
+#|warning: false
+
+dfCSub2 <- subset(Code_Violations, !(Neighborhood %in% c("Broadway Fillmore", "Genesee-Moselle", "Kensington-Bailey", "Lovejoy", "Riverside", "Schiller Park", NA)))
+
+ggplot(dfCSub2, aes(y = Neighborhood, fill = Code_Type)) +
+  theme_dark() +
+  scale_y_discrete(limits = rev) +
+  geom_bar(position = "fill", color = "grey90") +
+  scale_fill_brewer(palette="Spectral") +
+  labs(title = "Violation Types Distribution By Neighborhood, Not Top 6 by Count", y ="Neighborhood", x = "Proportion", fill = "Violation Type")
+
+```
+
+And again, the types of violations committed do not seem to be related to the total amount of violations in a neighborhood. We can derive from these plots that the overwhelming majority of violations are in "Property maintenance" (of both types) and "Building Code".
+
+## Is There A Relatonship Between Property Types and Code Violation Types?
+
+To answer this question, the most obvious method is to create a heat map. To make the results more readable, the gradient has been made sharper by using a log function to concentrate the results, without affecting the actual frequencies mapped.
+
+```{r}
+#|label: Heat Map of Property Types and Violation Types
+#|warning: false
+
+tbl <- table(Code_Violations$Property_Type, Code_Violations$Code_Type)
+
+df <- data.frame(tbl)
+
+ggplot(df, mapping = aes(x = Var1, y = Var2)) +
+  scale_y_discrete(limits = rev(levels(df$Var2))) +
+  geom_tile(mapping = aes(fill = log10(Freq))) +
+  labs(title = "Property Type vs Violation Type", x = "Property Type", 
+       y = "Violation Type", fill = "Count") +
+  scale_fill_gradient(breaks = c(0, 1, 2, 3, 4, 5), 
+                      labels = c(1, 10, 100, 1000, 10000, 100000), 
+                      low = "#56b1f7", high = "#132b43")+ 
+  theme(axis.text.x=element_text(angle = 20, vjust = 1, hjust = 1, size = 8),
+        axis.text.y=element_text(size = 8),
+        plot.title = element_text(hjust = 0.5))
+
+```
+
+This plot shows off several aspects of the data. Most obviously on the property side, the lack of "Agricultural" and "Wild/Conservation" property in the city of Buffalo, and the minimal amount of violations committed by property zoned as "Recreational", "Industrial", "Community Services", and "Public Services". As for the relationships demonstrated by this plot, we can observe that "Residential" and "Commercial" properties are the most likely to be ticketed on "Property Maintenance - Model" and "Building Code". Also, "Residential" properties are often in violations of "Residential Code".
+
+## Permit Fees and Value of Work Per Neighborhood
+
+Of interest to us is the distribution of Fees and Value of Work in the Neighborhoods examined, to find, perhaps, a link between the amount of code violations and issued permits and the cost/value of doing work in those areas. The Neighborhoods highlighted in red are the ones with the most permits issued, the ones in blue are the ones with the most violations, and Broadway Fillmore is purple because it is both. It must also be noted that while there is a large amount of outliers shown, there are even more residing beyond the plot's limits. We will be looking at the "box" part of the boxplots, to examine the median.
+
+```{r}
+#|label: Coloring Text and Permit Fees Across Neighborhoods Boxplot
+#|warning: false
+
+## note: discovered discrepancy in neighborhood numbers via this
+
+## source for coloring text: https://www.infoworld.com/article/2256014/add-color-to-your-ggplot2-text-in-r.html
+
+PerGraph <- Permits |>
+  mutate(
+    Neighborhood_with_color = ifelse(Neighborhood %in% c("Elmwood Bidwell", "Elmwood Bryant", 
+                                                         "North Park", "South Park"), 
+                                 glue::glue("<i style='color:darkred'>{Neighborhood}</i>"), 
+                                 
+                                 ifelse(Neighborhood %in% c("Genesee-Moselle", "Kensington-Bailey", 
+                                                            "Lovejoy", "Riverside", "Schiller Park"), 
+                                        glue::glue("<i style='color:midnightblue'>{Neighborhood}</i>"),
+                                        ifelse(Neighborhood %in% c("Broadway Fillmore"), 
+                                               glue::glue("<i style='color:magenta4'>{Neighborhood}</i>"),
+                                               glue::glue("{Neighborhood}")
+                                        )))) |> 
+  mutate(
+    Neighborhood_with_color = fct_relevel(Neighborhood_with_color, 
+                             c("Allentown", "Black Rock", "<i style='color:magenta4'>Broadway Fillmore</i>", 
+                              "Central","Central Park", "Delavan Grider", "Ellicott", "<i style='color:darkred'>Elmwood Bidwell</i>", "<i style='color:darkred'>Elmwood Bryant</i>",    
+                              "Fillmore-Leroy", "First Ward", "Fruit Belt",        
+                              "<i style='color:midnightblue'>Genesee-Moselle</i>", "Grant-Amherst", "Hamlin Park",       
+                              "Hopkins-Tifft", "Kaisertown", "Kenfield",          
+                              "<i style='color:midnightblue'>Kensington-Bailey</i>", "<i style='color:midnightblue'>Lovejoy</i>", "Lower West Side",   
+                              "Masten Park", "MLK Park", "<i style='color:darkred'>North Park</i>",        
+                              "Parkside", "Pratt-Willert", "<i style='color:midnightblue'>Riverside</i>",         
+                              "<i style='color:midnightblue'>Schiller Park</i>", "Seneca-Cazenovia", "Seneca Babcock",    
+                              "<i style='color:darkred'>South Park</i>", "University Heights", "Upper West Side", 
+                              "West Hertel", "West Side")
+                           ))
+
+ggplot(subset(PerGraph, !(Neighborhood %in% c(NA))), aes(y = Neighborhood_with_color)) +
+  scale_y_discrete(limits = rev) +
+  theme_dark() +
+  coord_cartesian(xlim = c(0, 800)) +
+  geom_boxplot(aes(x = Fees), color = "darkgoldenrod4", fill = "khaki1") +
+  scale_x_continuous(breaks = c(seq(0, 1000, 50))) +
+  labs(title = "Permit Fees By Neighborhood", y ="Neighborhood", 
+       x = "Fees, in $") +
+  theme(plot.title = element_text(hjust = 0.5), 
+        axis.text.y = element_markdown())
+
+
+```
+
+The original hypothesis for this section was that high average fees may be related to a lack of projects in a neighborhood, and vice versa. It does seem that the neighborhoods with the most permits have among the lowest median fees, there doesn't seem to be a strong relationship there.
+
+```{r}
+#|label: Value of Work by Neighborhood Boxplot
+#|warning: false
+
+ggplot(subset(PerGraph, !(Neighborhood %in% c(NA))), aes(y = Neighborhood_with_color)) +
+  scale_y_discrete(limits = rev) +
+  theme_dark() +
+  geom_boxplot(aes(x = `Value of Work`), color = "navy", fill = "skyblue") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(size = 8), 
+        axis.text.y = element_markdown()) +
+  coord_cartesian(xlim = c(0, 100000)) +
+  scale_x_continuous(breaks = c(seq(0, 110000, 10000)), 
+                     labels = scales::comma) +
+  labs(title = "Value of Work By Neighborhood", y ="Neighborhood", 
+       x = "Value of Work, in $")
+
+```
+
+There doesn't seem to be an obvious relationship here, either. It is interesting to note the high fees and value of work in the Central neighborhood, however. Makes sense, as it is the heart of downtown.
+
+## Are There Relationships Between Permit Fees, Value of Work, and Permit Type?
+
+To answer this question, we will create a scatter plot of these variables, and limit it slightly less than the previous two, in order to observe more data and demonstrate just how much of it lies beyond the IQR.
+
+```{r}
+#|label: Permit Fees and Value of Work and Type of Permit (It's the Required Numerical by Numerical Scatterplot!)
+#|warning: false
+
+ggplot(Permits, aes(x = Fees, y = `Value of Work`)) +
+  geom_point(aes(color = `Permit Type`), size = .8) +
+  theme_dark() +
+  coord_cartesian(ylim = c(0, 400000), xlim = c(0, 4000)) +
+  scale_color_brewer(palette = "Set3") +
+  scale_x_continuous(breaks = c(seq(0, 4500, 250)), 
+                     labels = scales::comma) +
+  scale_y_continuous(breaks = c(seq(0, 450000, 10000)), 
+                     labels = scales::comma) +
+  theme(legend.text = element_text(size = 7), 
+        plot.title = element_text(size = 9, hjust = 0.5), 
+        axis.text.y = element_text(size = 8), 
+        axis.text.x = element_text(size = 8)) +
+  labs(title = "Permit Fees vs Value of Work, Broken Down by Permit Type", 
+       y ="Value of Work, in $", x = "Fees, in $", color = "Permit Type")
+
+```
+
+The only real takeaways available from this plot is 1. the General Construction projects are often valued at multiples of 50,000 and 2. there seem to be three or more linear relationships between fees and value of work on Repair projects.
+
+## Time Trends of Permits Issued and Violations Committed
+
+The last point of interest is the distribution of Permits and Violations across time. This can be examined with some line graphs, to look both at the general trend across the entire recorded period, and any potential seasonality, by examining cumulative occurrences by month. Please note, the colors are of the plots are entirely consistent with the previous plots. This section of plots is also faceted by count, to improve readability.
+
+```{r}
+#|label: Data Preparation for Line Graphs and Violation Type Trends Across Month-Year
+#|warning: false
+
+dfV <- Code_Violations |> 
+  group_by(ViolationMY, Code_Type) |> 
+  summarize(count = n()) |> 
+  ungroup() |> 
+  mutate(facette = ifelse(Code_Type %in% c("Property Maintenance – Model", "Property Maintenance – NY State"), 
+                                       1, ifelse(Code_Type %in% c("Building Code", "Residential Code"), 
+                                                 2, 3))) |>
+  mutate(ViolationMY = my(ViolationMY))
+
+dfV2 <- Code_Violations |> 
+  mutate(MonthF = factor(ViolationMonth, levels = (1:12), labels = month.abb)) |> 
+  group_by(MonthF, Code_Type) |> 
+  summarize(count = n()) |> 
+  ungroup() |> 
+  mutate(facette = ifelse(Code_Type %in% c("Property Maintenance – Model", "Building Code"), 
+                                       1, ifelse(Code_Type %in% c("Property Maintenance – NY State"), 
+                                                 2, 3)))
+
+dfP <- Permits |> 
+  group_by(IssuedMY, `Permit Type`) |> 
+  summarize(count = n()) |> 
+  ungroup() |> 
+  mutate(facette = ifelse(`Permit Type` %in% c("HEATING", "PLUMBING", "REPAIR", "ELECTRICAL"), 
+                          1, 2)) |>
+  mutate(IssuedMY = my(IssuedMY))
+
+dfP2 <- Permits |> 
+  mutate(MonthF = factor(IssuedMonth, levels = (1:12), labels = month.abb)) |> 
+  group_by(MonthF, `Permit Type`) |> 
+  summarize(count = n()) |> 
+  ungroup() |> 
+  mutate(facette = ifelse(`Permit Type` %in% c("HEATING", "PLUMBING", "REPAIR", "ELECTRICAL"), 
+                          1, 2))
+
+
+ggplot(dfV, aes(x = ViolationMY, y = count, color = Code_Type)) +
+  geom_line(aes(group = Code_Type), size = 1) +
+  theme_dark() +
+  facet_grid(facette ~ ., scales = "free") +
+  theme(strip.text = element_blank(), 
+        plot.title = element_text(hjust = 0, 
+                                  size = 12),
+        legend.text = element_text(size = 7)) +
+  labs(title = "Distribution of Violation Types by MY", x = "Month-Year", 
+       y = "Count", color = "Violation Type") +
+  scale_color_manual(breaks = c("Property Maintenance – Model", 
+                                  "Property Maintenance – NY State", 
+                                "Building Code",    
+                                  "Residential Code", "International Building Code", 
+                                "Fire Code",                      
+                                  "Real Property Legal Statute", "General Building Code Committee",
+                                  "Other"),
+                     values = c("#d34050", "#f36c44", "#fcac61", 
+                                "#ffffbd", "#fddf89", "#e5f496", 
+                                "#a9dca2", "#65c0a3", "#3586bb"))
+
+```
+
+The jaggedness of the lines suggests a seasonality to the "month" aspect of the timeline. The only other point of interest here is the swap from "NY State" to "Model" style of classifying the "Property Maintenance" violation in 2017. The way the lines are moving toward each other again in 2025 may suggest a re-negotiation of this violation type is coming again. Building Code violations consistently show higher frequency, with counts generally fluctuating between 300 and 500 per month, but some minor fluctuations suggest cyclical or seasonal effects. The smaller categories play a critical role in capturing niche and specialized code enforcement activity.
+
+```{r}
+#|label: Violation Type Trends by Month (Cumulative)
+#|warning: false
+
+ggplot(dfV2, aes(x = MonthF, y = count, color = Code_Type)) +
+  geom_line(aes(group = Code_Type), size = 1.5) +
+  theme_dark() + 
+  facet_grid(facette ~ ., scales = "free") +
+  theme(strip.text = element_blank(), 
+        plot.title = element_text(hjust = 0, 
+                                  size = 12),
+        legend.text = element_text(size = 8)) +
+  labs(title = "Distribution of Violation Types (Cumulative) by Month", 
+       x = "Month", y = "Count", color = "Violation Type") +
+  scale_color_manual(breaks = c("Property Maintenance – Model", "Building Code", 
+                                  "Property Maintenance – NY State", "International Building Code",    
+                                  "Residential Code", "Fire Code",                      
+                                  "Real Property Legal Statute", "General Building Code Committee",
+                                  "Other"),
+                     values = c("#d34050", "#fcac61", "#f36c44", 
+                                "#fddf89", "#ffffbd", "#e5f496", 
+                                "#a9dca2", "#65c0a3", "#3586bb"))
+
+```
+
+The Property Maintenance – Model violations dominate the chart, consistently peaking between May and October, with a noticeable dip during December through February. This pattern strongly suggests seasonal enforcement or activity, possibly due to increased inspections or more visible property maintenance issues during warmer months.Property Maintenance – NY State violations show a moderate seasonal trend, with peaks in late spring and early summer.
+
+```{r}
+#|label: Permit Type Trends by Month-Year
+#|warning: false
+
+ggplot(dfP, aes(x = IssuedMY, y = count, color = `Permit Type`)) +
+  geom_line(aes(group = `Permit Type`), size = 1) +
+  theme_dark() +
+  facet_grid(facette ~ ., scales = "free") +
+  theme(strip.text = element_blank(), 
+        plot.title = element_text(hjust = 0, 
+                                  size = 12)) +
+  scale_color_manual(breaks = c("REPAIR", "ELECTRICAL", "HEATING", "PLUMBING", 
+                                "DEMOLITION", "FENDRIVE", "GC", "SIGN", 
+                                "USE", "Other"), 
+                     values = c("#b1dd68", "#ffffb1", "#7fafd1", "#fcb262", 
+                                "#8bd1c5", "#bcb8d8", "#fa7e71", "#fbcbe4", 
+                                "#d7d7d7", "#ba7ebb")) +
+  labs(title = "Distribution of Permit Types by MY Issued", 
+       x = "Month-Year", y = "Count")
+```
+
+The main points of interest for this plot are as follows: 1. the increase in "Repair" and "improvement" ("Electrical", "Heating", "Plumbing") and the decrease of "Demolition" permits issued across time; and 2. the very prominent seasonality of construction work, evidenced by the jaggedness of the lines. 3. the lack of effect
+
+```{r}
+#|label: Permit Type Trends by Month (Cumulative)
+#|warning: false
+
+ggplot(dfP2, aes(x = MonthF, y = count, color = `Permit Type`)) +
+  geom_line(aes(group = `Permit Type`), size = 1.5) +
+  theme_dark() +
+  facet_grid(facette ~ ., scales = "free") +
+  theme(strip.text = element_blank(), 
+        plot.title = element_text(hjust = 0, 
+                                  size = 12)) +
+  scale_color_manual(breaks = c("REPAIR", "ELECTRICAL", "HEATING", "PLUMBING", 
+                                "DEMOLITION", "FENDRIVE", "GC", "SIGN", 
+                                "USE", "Other"), 
+                     values = c("#b1dd68", "#ffffb1", "#7fafd1", "#fcb262", 
+                                "#8bd1c5", "#bcb8d8", "#fa7e71", "#fbcbe4", 
+                                "#d7d7d7", "#ba7ebb")) +
+  labs(title = "Distribution of Permit Types by Month Issued", 
+       x = "Month", y = "Count")
+```
+
+This plot demonstrates that the "outside" construction work is very seasonal, while the "indoor" type is less so. This is sharply obvious in the top facet of the plot. It is interesting that the "Heating" permits have an opposite seasonality to "Repair" and other "outside" types, due to one only noticing the lack of heating when it is too cold to do other construction.
+
+## Conclusion
+
+While this analysis does not lead to a single unified conclusion, it highlights notable seasonal patterns and volume differences across violation types. Property Maintenance – Model violations dominate and exhibit clear seasonality, with higher counts during warmer months. Similarly, Property Maintenance – NY State and Building Code violations show moderate peaks in spring and summer. In contrast, lower-frequency violation types remain steady year-round, with minimal seasonal influence.\
+\
+Looking at the permits data adds important context. Although certain neighborhoods issue far more permits than others, the types of permits remain relatively consistent citywide with Electrical, Plumbing, Heating, and Repair being the most common. The high volume of violations in neighborhoods like Broadway-Fillmore does not appear to be directly tied to permit activity or cost. Instead, Residential and Commercial properties are most frequently cited for violations such as Property Maintenance – Model and Building Code, regardless of permit trends. Interestingly, General Construction permits tend to cluster around higher-value projects, and some neighborhoods show high value and fees (e.g., Central), yet do not have disproportionately high violation rates suggesting that factors beyond just the scale of construction influence code enforcement patterns.
